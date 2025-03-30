@@ -1,33 +1,106 @@
 <?php
-// app/Http/Controllers/UserController.php
+
 namespace App\Http\Controllers;
 
 use App\Models\User;
-use Illuminate\Foundation\Auth\Access\AuthorizesRequests; // Import the trait
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Spatie\Permission\Models\Role;
 
 class UserController extends Controller
 {
-    use AuthorizesRequests; // Add the trait to enable authorize()
+    use AuthorizesRequests;
 
+    /**
+     * Display a listing of users
+     */
     public function index()
     {
-        $this->authorize('view_users'); // Check if the user has 'view_users' permission
-        $users = User::with('roles')->get();
-        return view('admin.users.index', compact('users'));
+        $this->authorize('view_users');
+
+        return view('lyouts.admin.users.index', [
+            'users' => User::with(['roles' => function ($query) {
+                            $query->select('name');
+                        }])
+                        ->get()
+                        ->map(function ($user) {
+                            return [
+                                'id' => $user->id,
+                                'name' => $user->name,
+                                'email' => $user->email,
+                                'roles' => $user->getRoleNames()
+                            ];
+                        })
+        ]);
     }
 
+    /**
+     * Assign role to user
+     */
     public function assignRole(Request $request, User $user)
     {
-        $this->authorize('manage_roles'); // Check if the user has 'manage_roles' permission
+        $this->authorize('manage_roles');
 
-        // Validate the role input
-        $request->validate([
-            'role' => 'required|exists:roles,name', // Ensure the role exists in the roles table
+        $validated = $request->validate([
+            'role' => [
+                'required',
+                'string',
+                Rule::exists('roles', 'name'),
+                function ($attribute, $value, $fail) use ($user) {
+                    if ($user->hasRole($value)) {
+                        $fail("User already has the {$value} role.");
+                    }
+                }
+            ]
         ]);
 
-        $user->assignRole($request->role); // Assign the validated role
-        return redirect()->back()->with('success', 'Role assigned successfully.');
+        try {
+            $role = Role::where('name', $validated['role'])->firstOrFail();
+            $user->syncRoles($role);
+
+            return redirect()
+                ->back()
+                ->with('success', "Successfully assigned {$role->name} role to user.");
+
+        } catch (\Exception $e) {
+            return redirect()
+                ->back()
+                ->with('error', 'Failed to assign role: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Remove role from user
+     */
+    public function removeRole(Request $request, User $user)
+    {
+        $this->authorize('manage_roles');
+
+        $validated = $request->validate([
+            'role' => [
+                'required',
+                'string',
+                Rule::exists('roles', 'name'),
+                function ($attribute, $value, $fail) use ($user) {
+                    if (!$user->hasRole($value)) {
+                        $fail("User doesn't have the {$value} role.");
+                    }
+                }
+            ]
+        ]);
+
+        try {
+            $user->removeRole($validated['role']);
+
+            return redirect()
+                ->back()
+                ->with('success', "Successfully removed {$validated['role']} role.");
+
+        } catch (\Exception $e) {
+            return redirect()
+                ->back()
+                ->with('error', 'Failed to remove role: ' . $e->getMessage());
+        }
     }
 }
